@@ -7,7 +7,9 @@
     "start": "node main.js",
     "init": "node main.js init",
     "status": "node main.js status",
-    "test": "node main.js --simulate status"
+    "test": "node main.js --simulate status",
+    "video": "node scripts/generate-video.js",
+    "video:simulate": "node scripts/generate-video.js --simulate"
   },
   "keywords": [
     "social-media",

@@ -9,20 +9,35 @@
  * 5. Async Operation Handling
  * 6. All API Parameters (aspectRatio, resolution, duration, etc.)
  *
- * Primary Provider: Google Gemini Veo 3.1
- * Model: veo-3.1-generate-preview
+ * Providers:
+ * - Google Gemini Veo 3.1 (default)
+ * - Fal AI Seedance (alternative)
  *
  * @see https://ai.google.dev/gemini-api/docs/video
+ * @see https://fal.ai/models/fal-ai/bytedance/seedance
  */
+
+// Fal AI client - use same pattern as longcat-generator
+const fal = require('@fal-ai/client');
 
 class VideoGenerator {
   constructor(options = {}) {
     this.apiKey = options.apiKey || process.env.GEMINI_API_KEY;
+    this.falApiKey = options.falApiKey || process.env.FAL_KEY;
+    this.provider = options.provider || 'gemini'; // 'gemini' or 'fal'
     this.simulate = options.simulate || false;
     this.defaultModel = options.model || "veo-3.1-generate-preview";
+    this.falModel = options.falModel || "fal-ai/bytedance/seedance/v1/pro/fast/text-to-video";
 
     // Gemini client (lazy loaded)
     this.client = null;
+
+    // Configure Fal AI client if API key provided
+    if (this.falApiKey && fal.fal) {
+      fal.fal.config({
+        credentials: this.falApiKey
+      });
+    }
 
     // Default configuration
     this.defaultConfig = {
@@ -68,10 +83,18 @@ class VideoGenerator {
       return this._simulateResult("text-to-video");
     }
 
+    // Use Fal AI Seedance if provider is 'fal' or if Gemini API key not available
+    const useFal = this.provider === 'fal' || (!this.apiKey && this.falApiKey);
+
+    if (useFal) {
+      return await this._textToVideoFal(prompt, config);
+    }
+
+    // Default to Gemini Veo
     const ai = await this.initClient();
     const finalConfig = { ...this.defaultConfig, ...config };
 
-    console.log(`🎬 Text-to-Video Generation`);
+    console.log(`🎬 Text-to-Video Generation (Gemini Veo)`);
     console.log(`   Prompt: ${prompt.substring(0, 60)}...`);
     console.log(`   Config: ${JSON.stringify(finalConfig)}`);
 
@@ -97,8 +120,78 @@ class VideoGenerator {
       videoFile: result.generatedVideos[0].video,
       duration: finalConfig.duration || 8,
       config: finalConfig,
-      operation: operation
+      operation: operation,
+      provider: 'gemini'
     };
+  }
+
+
+  /**
+   * Generate video using Fal AI Seedance
+   * @private
+   */
+  async _textToVideoFal(prompt, config = {}) {
+    if (!this.falApiKey) {
+      throw new Error('FAL_KEY environment variable not set. Please configure your fal.ai API key.');
+    }
+
+    const finalConfig = { ...this.defaultConfig, ...config };
+    const duration = finalConfig.duration || 8;
+
+    console.log(`🎬 Text-to-Video Generation (Fal AI Seedance)`);
+    console.log(`   Prompt: ${prompt.substring(0, 60)}...`);
+    console.log(`   Model: ${this.falModel}`);
+    console.log(`   Duration: ${duration}s`);
+    console.log(`   Config: ${JSON.stringify(finalConfig)}`);
+
+    try {
+      const result = await fal.fal.subscribe(this.falModel, {
+        input: {
+          prompt: prompt,
+          duration: duration,
+          aspect_ratio: finalConfig.aspectRatio || '16:9',
+          ...(finalConfig.seed && { seed: finalConfig.seed })
+        },
+        logs: true,
+        onQueueUpdate: (update) => {
+          if (update.status === 'IN_PROGRESS') {
+            console.log(`   ⚙️  Processing: ${update.logs || 'Generating video...'}`);
+          }
+        }
+      });
+
+      // Fal AI Seedance response structure: { data: { video: { url: ... } } }
+      const videoUrl = result.data?.video?.url || result.video?.url || result.video_url || result.url;
+      if (!videoUrl) {
+        console.error('Fal AI Response:', JSON.stringify(result, null, 2));
+        throw new Error('No video URL in Fal AI response');
+      }
+
+      // Download video to local file
+      const downloadPath = `/tmp/fal-seedance-${Date.now()}.mp4`;
+      const response = await fetch(videoUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to download video: ${response.statusText}`);
+      }
+      const buffer = await response.arrayBuffer();
+      const fs = await import('fs');
+      await fs.promises.writeFile(downloadPath, Buffer.from(buffer));
+
+      console.log(`   ✅ Video saved to ${downloadPath}`);
+
+      return {
+        type: "text-to-video",
+        videoUri: downloadPath,
+        videoUrl: videoUrl,
+        duration: duration,
+        config: finalConfig,
+        provider: 'fal-seedance'
+      };
+
+    } catch (error) {
+      console.error(`   ❌ Fal AI Seedance generation failed: ${error.message}`);
+      throw new Error(`Fal AI Seedance text-to-video failed: ${error.message}`);
+    }
   }
 
   /**
