@@ -63,7 +63,7 @@ Creates and sends email campaign to a MoEngage segment.
 
 **Parameters:**
 - `newsletter`: Object with `html`, `subject`, `preheader`, `plainText`, `topic`
-- `options`: 
+- `options`:
   - `segmentId` (optional, defaults to env var)
   - `fromEmail` (optional, defaults to env var)
   - `fromName` (optional, defaults to env var)
