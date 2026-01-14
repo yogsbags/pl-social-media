@@ -88,3 +88,10 @@ Based on your requirements:
 - Test emails are sent automatically if `MOENGAGE_DEFAULT_TEST_EMAIL` is configured
 - The old event-based method (`publishNewsletter`) is still available but deprecated
 
+
+
+
+
+
+
+
