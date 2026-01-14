@@ -114,10 +114,3 @@ node scripts/generate-video.js \
 ```
 
 
-
-
-
-
-
-
-
