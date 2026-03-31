@@ -131,9 +131,16 @@ export async function POST(request: NextRequest) {
         }
         if (autoPublish) args.push('--auto-publish')
 
-        platforms.forEach((platform: string) => {
-          args.push('--platform', platform)
-        })
+        if (campaignType === 'infographic') {
+          const primary =
+            (Array.isArray(platforms) && platforms.length > 0 ? String(platforms[0]).trim() : '') || 'linkedin'
+          args.push('--platform', primary)
+          args.push('--format', 'infographic')
+        } else {
+          platforms.forEach((platform: string) => {
+            args.push('--platform', platform)
+          })
+        }
 
         // Add parent node_modules to NODE_PATH for module resolution
         const parentNodeModules = path.join(process.cwd(), 'node_modules')

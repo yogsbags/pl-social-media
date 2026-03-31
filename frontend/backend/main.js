@@ -191,6 +191,7 @@ function printHelp() {
   console.log('  youtube-short          - 60s vertical video');
   console.log('  facebook-reel         - Short-form vertical video (same flow as Instagram Reel)');
   console.log('  twitter-thread         - Educational thread');
+  console.log('  infographic            - Single infographic image (Stage 2 blueprint + Stage 3 visual)');
   console.log('');
   console.log('WORKFLOW STAGES:');
   console.log('  1. planning            - Campaign planning & topic selection');

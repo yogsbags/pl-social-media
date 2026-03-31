@@ -412,6 +412,114 @@ Output ONLY the JSON object, no other text.`;
     }
   }
 
+
+  /**
+   * Generate structured infographic blueprint (title, sections, CTA) via Groq JSON.
+   * @private
+   */
+  async _generateInfographicBlueprint(options) {
+    const topic = (options.topic || 'Investing insights').trim();
+    const platform = options.platform || 'linkedin';
+    const language = options.language || 'english';
+    const planning = this._getLatestCampaignPlanningEntry(topic);
+    const planningText = (planning?.creativePrompt || planning?.output || '').trim().slice(0, 2000);
+    const pdfContext = (process.env.RESEARCH_PDF_CONTEXT || '').trim().slice(0, 2000);
+
+    const defaults = {
+      title: topic,
+      subtitle: 'Key takeaways at a glance',
+      layoutStyle: 'Clean vertical flow: bold header, 4–5 icon-led sections, subtle dividers, footer CTA strip',
+      sections: [
+        { heading: 'The big idea', body: 'One sentence why this matters for investors.', statOrNumber: '', visualCue: 'Simple lightbulb or target icon' },
+        { heading: 'What to know', body: 'Two short bullets worth remembering.', statOrNumber: '', visualCue: 'Mini checklist icons' },
+        { heading: 'Common mistake', body: 'One pitfall to avoid (compliant, no fear-mongering).', statOrNumber: '', visualCue: 'Warning stripe + icon' },
+        { heading: 'Next step', body: 'One actionable step (not personalized advice).', statOrNumber: '', visualCue: 'Arrow + calendar icon' }
+      ],
+      footerCta: 'Follow PL Capital for more insights',
+      disclaimerLine: 'Investments are subject to market risks. Read all documents carefully.'
+    };
+
+    const groqKey = process.env.GROQ_API_KEY;
+    if (!groqKey) {
+      return defaults;
+    }
+
+    const systemPrompt = `You are an expert infographic content designer for PL Capital (Indian wealth management). Output MUST be valid JSON only — no markdown, no code fences.
+
+Return one JSON object with keys:
+- "title": string, max 8 words, punchy headline for the top of the infographic
+- "subtitle": string, optional short line under title (max 12 words)
+- "layoutStyle": string, brief art-direction for a single static infographic (grid vs vertical flow, icon style)
+- "sections": array of 4–6 objects, each with:
+  - "heading": short (max 5 words)
+  - "body": 1–2 short sentences OR a single line with " • " separators (no long paragraphs)
+  - "statOrNumber": string, optional (e.g. "₹500", "7 yrs", "12% CAGR example") — must not imply guaranteed returns
+  - "visualCue": string, what simple flat icon or mini chart to illustrate this block
+- "footerCta": string, CTA line (e.g. "Save & follow PL Capital")
+- "disclaimerLine": string, one compliant line (e.g. "Market risks apply.")
+
+Rules: No guaranteed returns, no personalized advice, no sensational claims. Language: ${this._getLanguageName(language)}. Platform tone: ${platform}.`;
+
+    const userPrompt = `Topic: ${topic}
+Create infographic blueprint content.
+${planningText ? `Creative direction from planning:\n${planningText}\n` : ''}${pdfContext ? `Reference facts (use where relevant, stay accurate):\n${pdfContext}\n` : ''}
+Output ONLY the JSON object.`;
+
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${groqKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: process.env.GROQ_INFOGRAPHIC_MODEL || 'llama-3.3-70b-versatile',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.55,
+          max_tokens: 1800,
+          response_format: { type: 'json_object' }
+        })
+      });
+
+      if (!response.ok) {
+        const t = await response.text().catch(() => '');
+        console.log(`   ⚠️ Groq infographic API error: ${response.status} ${t}`);
+        return defaults;
+      }
+
+      const data = await response.json();
+      let raw = (data.choices?.[0]?.message?.content || '').trim();
+      raw = raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+      const parsed = JSON.parse(raw);
+
+      const title = typeof parsed.title === 'string' ? parsed.title.trim() : defaults.title;
+      const subtitle = typeof parsed.subtitle === 'string' ? parsed.subtitle.trim() : defaults.subtitle;
+      const layoutStyle = typeof parsed.layoutStyle === 'string' ? parsed.layoutStyle.trim() : defaults.layoutStyle;
+      const footerCta = typeof parsed.footerCta === 'string' ? parsed.footerCta.trim() : defaults.footerCta;
+      const disclaimerLine = typeof parsed.disclaimerLine === 'string' ? parsed.disclaimerLine.trim() : defaults.disclaimerLine;
+
+      let sections = Array.isArray(parsed.sections) ? parsed.sections : defaults.sections;
+      sections = sections.slice(0, 8).map((s) => ({
+        heading: typeof s?.heading === 'string' ? s.heading.trim() : 'Point',
+        body: typeof s?.body === 'string' ? s.body.trim() : 'Short takeaway.',
+        statOrNumber: typeof s?.statOrNumber === 'string' ? s.statOrNumber.trim() : '',
+        visualCue: typeof s?.visualCue === 'string' ? s.visualCue.trim() : 'Flat icon'
+      }));
+      if (sections.length < 3) {
+        sections = defaults.sections;
+      }
+
+      return { title, subtitle, layoutStyle, sections, footerCta, disclaimerLine };
+    } catch (err) {
+      console.log(`   ⚠️ Infographic blueprint generation failed: ${err instanceof Error ? err.message : 'unknown'}`);
+      return defaults;
+    }
+  }
+
+
   /**
    * Initialize the workflow system
    */
@@ -508,7 +616,8 @@ Output ONLY the JSON object, no other text.`;
       'youtube-short': this.runYouTubeShort.bind(this),
       'facebook-reel': this.runFacebookReel.bind(this),
       'twitter-thread': this.runTwitterThread.bind(this),
-      'email-newsletter': this.runEmailNewsletter.bind(this)
+      'email-newsletter': this.runEmailNewsletter.bind(this),
+      'infographic': this.runInfographicCampaign.bind(this)
     };
 
     const handler = campaignHandlers[campaignType];
@@ -572,6 +681,38 @@ Output ONLY the JSON object, no other text.`;
 
     console.log('\n✅ LinkedIn carousel ready!');
   }
+
+  async runInfographicCampaign(options) {
+    const platform = (options.platform || 'linkedin').toString().trim() || 'linkedin';
+    console.log('📊 Infographic Campaign');
+    console.log(`   Topic: ${options.topic}`);
+    console.log(`   Platform: ${platform}\n`);
+
+    await this.stageContent({
+      platform,
+      format: 'infographic',
+      topic: options.topic,
+      type: options.type || 'infographic',
+      language: options.language,
+      aspectRatio: options.aspectRatio
+    });
+
+    await this.stageVisuals({
+      platform,
+      format: 'infographic',
+      topic: options.topic,
+      language: options.language,
+      aspectRatio: options.aspectRatio,
+      useGrounding: false
+    });
+
+    if (options.autoPublish) {
+      await this.stagePublishing({ platform });
+    }
+
+    console.log('\n✅ Infographic ready!');
+  }
+
 
   async runLinkedInTestimonial(options) {
     console.log('🎥 LinkedIn Video Testimonial Campaign');
@@ -1062,6 +1203,44 @@ Make it specific, actionable, and optimized for ${options.platform || 'the platf
       };
     }
 
+
+    // Infographic: structured blueprint for Stage 3 single-image generation
+    const isInfographic = options.format === 'infographic' && options.platform;
+    if (isInfographic) {
+      const igPlatform = options.platform;
+      console.log('   📊 Generating infographic blueprint (structured sections)...');
+
+      const blueprint = await this._generateInfographicBlueprint({
+        topic: options.topic,
+        platform: igPlatform,
+        language: options.language
+      });
+
+      const contentPack = {
+        platforms: {
+          [igPlatform]: {
+            infographic: blueprint
+          }
+        }
+      };
+
+      const contentId = `CONT-infographic-${Date.now()}`;
+      await this.stateManager.addContent({
+        id: contentId,
+        topic: (options.topic || '').trim() || 'Infographic',
+        contentPack,
+        status: 'completed',
+        completedAt: new Date().toISOString()
+      });
+
+      console.log('   ✅ Infographic blueprint saved — ready for Stage 3 visuals');
+      return {
+        success: true,
+        contentId,
+        message: 'Infographic blueprint generated'
+      };
+    }
+
     // TODO: Implement other AI content generation
     console.log('   ⚠️  Content generation not yet implemented for this platform');
   }
@@ -1293,6 +1472,104 @@ Make it specific, actionable, and optimized for ${options.platform || 'the platf
           success: true,
           images: generatedImages,
           features: ['carousel', 'multi-slide']
+        };
+      }
+
+
+      // Infographic: one tall image from Stage 2 blueprint
+      const isInfographicVisual = options.format === 'infographic' && Boolean(options.platform);
+
+      if (isInfographicVisual) {
+        const igPlatform = options.platform;
+        const platformLabel = igPlatform.charAt(0).toUpperCase() + igPlatform.slice(1);
+        console.log(`   📊 ${platformLabel} infographic — generating single composite visual...`);
+
+        await this.stateManager.initialize();
+        const contentEntries = Object.values(this.stateManager?.state?.content || {}).filter(Boolean);
+        const byCompletedAtDesc = (a, b) => {
+          const aTs = new Date(a?.completedAt || a?.updatedAt || a?.createdAt || 0).getTime();
+          const bTs = new Date(b?.completedAt || b?.updatedAt || b?.createdAt || 0).getTime();
+          return bTs - aTs;
+        };
+        const topic = (options.topic || '').trim();
+        const withIg = contentEntries.filter((e) => e?.contentPack?.platforms?.[igPlatform]?.infographic);
+        const latestContent =
+          (withIg.length > 0
+            ? (topic ? withIg.filter((e) => (e?.topic || '').trim() === topic).sort(byCompletedAtDesc)[0] : null) ||
+              withIg.sort(byCompletedAtDesc)[0]
+            : null) || null;
+
+        const blueprint = latestContent?.contentPack?.platforms?.[igPlatform]?.infographic || null;
+        const effectiveBrandSettings = this._getEffectiveBrandSettings(options);
+        const brandStyle = effectiveBrandSettings
+          ? this._buildBrandConstraintBlock(effectiveBrandSettings)
+          : 'PL Capital brand: Navy (#0e0e6a), Blue (#3c3cf8), Teal (#00d084), Green (#66e766), Figtree typography. Professional, clean, no exaggerated claims.';
+
+        let bp = blueprint;
+        if (!bp || !Array.isArray(bp.sections) || bp.sections.length === 0) {
+          console.log('   ⚠️ No infographic blueprint in state; generating fallback blueprint now.');
+          bp = await this._generateInfographicBlueprint({
+            topic: options.topic,
+            platform: igPlatform,
+            language: options.language
+          });
+        }
+
+        const sectionsText = (bp.sections || [])
+          .map((s, i) => {
+            const stat = s.statOrNumber ? ` Highlight: "${s.statOrNumber}".` : '';
+            return `Block ${i + 1}: HEADING "${s.heading}". Body: ${s.body}.${stat} Visual: ${s.visualCue}.`;
+          })
+          .join('\n');
+
+        const infographicPrompt = `Design ONE complete vertical infographic image (single static graphic, not multiple panels) for PL Capital — Indian wealth management audience.
+
+LAYOUT: ${bp.layoutStyle || 'Portrait infographic with clear header, 4–6 stacked sections with icons, footer CTA.'}
+MAIN TITLE (top, largest): "${bp.title}"
+${bp.subtitle ? `SUBTITLE: "${bp.subtitle}"` : ''}
+
+CONTENT BLOCKS (must appear as readable on-image typography with hierarchy):
+${sectionsText}
+
+FOOTER STRIP: "${bp.footerCta}"
+SMALL COMPLIANCE LINE (bottom, subtle): "${bp.disclaimerLine}"
+
+VISUAL RULES:
+- Flat vector / modern fintech infographic style; cohesive color system; strong spacing and alignment
+- Simple icons, thin line charts or bar micro-charts where helpful — NO photorealistic people or faces
+- NO watermarks except subtle "PL Capital" wordmark if it fits brand
+- All text must be sharp and legible; avoid cramming; prefer fewer words per block
+- Single cohesive canvas — not a photo collage
+
+${brandStyle}`;
+
+        const aspect = options.aspectRatio || this._getAspectRatioForFormat('infographic');
+        console.log(`   ⏳ Generating infographic (${aspect})...`);
+        const igResult = await generator.generateSocialGraphic(infographicPrompt, igPlatform, {
+          imageSize: 'HD',
+          useGrounding: false,
+          aspectRatio: aspect,
+          language: options.language,
+          numberOfImages: 1
+        });
+
+        const images = igResult?.images || [];
+        if (process.env.IMGBB_API_KEY && images.length > 0) {
+          console.log('   ☁️  Uploading infographic to ImgBB...');
+          for (const img of images) {
+            const imagePath = img.path || img.url;
+            const hostedUrl = await uploadToImgBB(imagePath);
+            if (hostedUrl) {
+              img.hostedUrl = hostedUrl;
+              console.log(`   ✅ Uploaded to ImgBB: ${hostedUrl}`);
+            }
+          }
+        }
+
+        return {
+          success: true,
+          images,
+          features: ['infographic', 'single-image']
         };
       }
 
@@ -1667,7 +1944,8 @@ ${brandGuidance}`;
       'reel': '9:16',
       'thumbnail': '16:9',
       'explainer': '16:9',
-      'cover': '16:9'
+      'cover': '16:9',
+      'infographic': '3:4'
     };
 
     return aspectRatios[format] || '1:1';

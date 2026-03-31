@@ -713,16 +713,27 @@ export async function POST(request: NextRequest) {
         if (campaignType) {
           args.push('--type', campaignType)
 
-          // Extract platform from campaignType (e.g., "linkedin-testimonial" -> "linkedin")
-          const platform = campaignType.split('-')[0]
-          if (platform) {
-            args.push('--platform', platform)
-          }
+          // Standalone campaign types (no "platform-format" hyphen pattern) must not use split('-')[0] as platform.
+          // e.g. "infographic" was wrongly passing --platform infographic and omitting --format.
+          const primaryPlatform =
+            Array.isArray(platforms) && platforms.length > 0 ? String(platforms[0]).trim() : ''
 
-          // Extract format from campaignType (e.g., "linkedin-testimonial" -> "testimonial")
-          const format = campaignType.split('-').slice(1).join('-')
-          if (format) {
-            args.push('--format', format)
+          if (campaignType === 'infographic') {
+            const p = primaryPlatform || 'linkedin'
+            args.push('--platform', p)
+            args.push('--format', 'infographic')
+          } else {
+            // Extract platform from campaignType (e.g., "linkedin-testimonial" -> "linkedin")
+            const platform = campaignType.split('-')[0]
+            if (platform) {
+              args.push('--platform', platform)
+            }
+
+            // Extract format from campaignType (e.g., "linkedin-testimonial" -> "testimonial")
+            const format = campaignType.split('-').slice(1).join('-')
+            if (format) {
+              args.push('--format', format)
+            }
           }
         }
 
